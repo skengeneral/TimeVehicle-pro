@@ -92,8 +92,7 @@ def get_gmail_profile(base_dir=None):
 def rewrite_body(api_key, body_template, lead):
     """
     Rewrites the body template uniquely for each business.
-    Uses full lead data (name, rating, address, phone) for
-    rich, context-aware personalisation.
+    Uses ONLY the data from the Excel file — never outside knowledge.
     """
     name    = lead.get("name",    "")
     rating  = lead.get("rating",  "")
@@ -115,16 +114,20 @@ def rewrite_body(api_key, body_template, lead):
 
     prompt = (
         f"You are helping a professional send personalised outreach emails.\n\n"
-        f"Recipient business details:\n{context}\n\n"
+        f"Recipient business details (from verified data — use ONLY these details):\n"
+        f"{context}\n\n"
         f"Original email body template:\n---\n{body_template}\n---\n\n"
-        f"Rewrite the body uniquely and personally for {name}:\n"
-        f"- Naturally mention '{name}' once or twice where it fits organically\n"
-        f"- If appropriate, subtly reference their rating, location, or other details\n"
-        f"- Vary sentence structure, vocabulary, and phrasing from the original\n"
-        f"- Keep the same core message, intent, tone, and approximate length\n"
-        f"- Sound professional and human — not AI-generated\n"
-        f"- Body paragraphs only — no greeting, no sign-off, no subject line\n"
-        f"- Return ONLY the rewritten body text, nothing else"
+        f"STRICT RULES — you must follow all of these without exception:\n"
+        f"1. Use ONLY the business details provided above — never use your own knowledge about this business\n"
+        f"2. If you reference the business location, use ONLY the exact address provided: '{address}'\n"
+        f"3. Do NOT invent, assume, or add any details not explicitly given above\n"
+        f"4. If a detail is not provided, simply do not mention it\n"
+        f"5. Naturally mention '{name}' once or twice where it fits organically\n"
+        f"6. Vary sentence structure, vocabulary, and phrasing from the original template\n"
+        f"7. Keep the same core message, intent, tone, and approximate length\n"
+        f"8. Sound professional and human — not AI-generated\n"
+        f"9. Body paragraphs only — no greeting, no sign-off, no subject line\n"
+        f"10. Return ONLY the rewritten body text, nothing else"
     )
 
     resp = requests.post(
