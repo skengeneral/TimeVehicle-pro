@@ -1,124 +1,150 @@
 import os
 import sys
-from datetime import datetime
-from pathlib import Path
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.worksheet.datavalidation import DataValidation
 
-def save_to_excel(data_cards, custom_columns=None):
-    """
-    Accepts the array of processed extraction data cards and structures them 
-    into a pristine Excel matrix, running completely out of system RAM.
-    """
-    if not data_cards:
-        return "No Data"
-
-    try:
-        import openpyxl
-        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-        from openpyxl.utils import get_column_letter
-    except ImportError:
-        raise Exception("Required library 'openpyxl' is missing inside the execution runtime.")
-
-    # 🟢 FIXED FOR PRO: Detects the directory where the user launched the .exe file
-    if getattr(sys, 'frozen', False):
-        output_dir = Path(sys.executable).parent
-    else:
-        output_dir = Path(os.path.dirname(os.path.abspath(__file__)))
-
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"timevehicle1.0_Export_{timestamp}.xlsx"
-    output_filepath = output_dir / filename
-
-    # --- Robust Layout Structure Handling ---
-    default_structure = [
-        ("Business Name", "Business Name"),
-        ("Google Rating", "Google Rating"),
-        ("Complete Address", "Complete Address"),
-        ("Operating Hours Matrix", "Operating Hours Matrix"),
-        ("Website Link", "Website Link"),
-        ("Email ID", "Email ID"),
-        ("Phone Number", "Phone Number"),
-        ("Facebook Handle", "Facebook Handle"),
-        ("Instagram Handle", "Instagram Handle"),
-        ("LinkedIn Handle", "LinkedIn Handle"),
-        ("Twitter/X Handle", "Twitter/X Handle")
-    ]
-
-    columns_to_build = []
-    if custom_columns:
-        for item in custom_columns:
-            if isinstance(item, tuple):
-                columns_to_build.append(item)
-            else:
-                columns_to_build.append((item, item))
-    else:
-        columns_to_build = default_structure
-
-    # Spin up the native excel instances out of RAM
-    wb = openpyxl.Workbook()
+def save_to_excel(data, columns_layout=None):
+    wb = Workbook()
     ws = wb.active
-    ws.title = "Compiled Leads Matrix"
+    ws.title = "Local Business Leads"
+
     ws.views.sheetView[0].showGridLines = True
 
-    # Styling Presets
-    font_header = Font(name="Segoe UI", size=11, bold=True, color="FFFFFF")
-    font_data = Font(name="Segoe UI", size=10, bold=False, color="000000")
-    fill_header = PatternFill(start_color="002D4A", end_color="002D4A", fill_type="solid")
-    align_center = Alignment(horizontal="center", vertical="center", wrap_text=False)
-    align_left = Alignment(horizontal="left", vertical="center", wrap_text=False)
-    thin_side = Side(border_style="thin", color="E2E8F0")
-    cell_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+    # ── Colour palette ────────────────────────────────────────────
+    header_fill  = PatternFill(start_color="002D4A", end_color="002D4A", fill_type="solid")
+    select_fill  = PatternFill(start_color="1A5276", end_color="1A5276", fill_type="solid")
+    select_cell_fill = PatternFill(start_color="D6EAF8", end_color="D6EAF8", fill_type="solid")
+    section_fill = PatternFill(start_color="001F33", end_color="001F33", fill_type="solid")
+    input_fill   = PatternFill(start_color="FDFEFE", end_color="FDFEFE", fill_type="solid")
 
-    # Build Header Row
-    for col_idx, (_, display_name) in enumerate(columns_to_build, start=1):
-        cell = ws.cell(row=1, column=col_idx, value=display_name)
-        cell.font = font_header
-        cell.fill = fill_header
-        cell.alignment = align_center
+    header_font  = Font(name="Arial", size=11, bold=True, color="FFFFFF")
+    data_font    = Font(name="Arial", size=10, color="000000")
+    section_font = Font(name="Arial", size=11, bold=True, color="00E5CC")
+    input_font   = Font(name="Arial", size=10, color="000000")
+
+    center_align = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    left_align   = Alignment(horizontal="left",   vertical="center", wrap_text=True)
+    top_left     = Alignment(horizontal="left",   vertical="top",    wrap_text=True)
+
+    thin         = Side(border_style="thin", color="E2E8F0")
+    thick        = Side(border_style="medium", color="002D4A")
+    cell_border  = Border(left=thin, right=thin, top=thin, bottom=thin)
+    section_border = Border(left=thick, right=thick, top=thick, bottom=thick)
+
+    # ── Headers — SELECT is always column A ───────────────────────
+    data_headers = [
+        "Business Name", "Google Rating", "Complete Address",
+        "Operating Hours Matrix", "Website Link", "Email ID",
+        "Phone Number", "Facebook Handle", "Instagram Handle",
+        "LinkedIn Handle", "Twitter/X Handle"
+    ]
+    all_headers = ["SELECT"] + data_headers
+    total_cols  = len(all_headers)
+
+    # Write header row
+    ws.append(all_headers)
+    for col_num, header in enumerate(all_headers, 1):
+        cell = ws.cell(row=1, column=col_num)
+        cell.fill   = select_fill if header == "SELECT" else header_fill
+        cell.font   = header_font
+        cell.alignment = center_align
         cell.border = cell_border
-    ws.row_dimensions[1].height = 26
+    ws.row_dimensions[1].height = 28
 
-    # Build Data Rows
-    for row_idx, card in enumerate(data_cards, start=2):
-        for col_idx, (dict_key, _) in enumerate(columns_to_build, start=1):
-            raw_value = card.get(dict_key, "Not Provided")
-            if raw_value is None or str(raw_value).strip() == "":
-                raw_value = "Not Provided"
+    # ── Yes / No dropdown validation for SELECT column ────────────
+    dv = DataValidation(
+        type="list",
+        formula1='"Yes,No"',
+        allow_blank=False,
+        showDropDown=False,       # False = show the ▼ arrow
+        showErrorMessage=True,
+        errorTitle="Invalid",
+        error="Please choose Yes or No from the dropdown."
+    )
+    ws.add_data_validation(dv)
 
-            cell = ws.cell(row=row_idx, column=col_idx, value=raw_value)
-            cell.font = font_data
+    # ── Data rows ─────────────────────────────────────────────────
+    for row_idx, item in enumerate(data, 2):
+        row_values = ["No"] + [item.get(h, "Not Provided") for h in data_headers]
+        ws.append(row_values)
+        ws.row_dimensions[row_idx].height = 22
+
+        for col_idx, header in enumerate(all_headers, 1):
+            cell = ws.cell(row=row_idx, column=col_idx)
+            cell.font   = data_font
             cell.border = cell_border
-            
-            if dict_key in ["Google Rating", "Phone Number"]:
-                cell.alignment = align_center
+            if header == "SELECT":
+                cell.fill      = select_cell_fill
+                cell.alignment = center_align
+                dv.add(cell)                      # attach dropdown
+            elif header == "Google Rating":
+                cell.alignment = center_align
             else:
-                cell.alignment = align_left
-        ws.row_dimensions[row_idx].height = 20
+                cell.alignment = left_align
 
-    # Auto-adjust column width adjustments dynamically
-    for col_idx in range(1, len(columns_to_build) + 1):
-        col_letter = get_column_letter(col_idx)
-        max_len = 0
-        for cell in ws[col_letter]:
-            if cell.value:
-                max_len = max(max_len, len(str(cell.value)))
-        ws.column_dimensions[col_letter].width = max(max_len + 3, 12)
+    # ── Column widths ─────────────────────────────────────────────
+    for col in ws.columns:
+        col_letter = col[0].column_letter
+        max_len    = max((len(str(c.value or "")) for c in col), default=10)
+        ws.column_dimensions[col_letter].width = min(max(max_len + 3, 12), 45)
+    ws.column_dimensions["A"].width = 10   # SELECT column fixed narrow
 
-    # Commit write properties to hardware
-    try:
-        wb.save(str(output_filepath))
-        return os.path.abspath(str(output_filepath))
-    except Exception as e:
-        print(f"❌ Primary disk write failure: {str(e)}")
-        try:
-            fallback_path = Path(filename).resolve()
-            wb.save(str(fallback_path))
-            return str(fallback_path)
-        except:
-            return "Generation Error"
+    # ── Draft email settings section ──────────────────────────────
+    last_data_row = len(data) + 1
+    section_row   = last_data_row + 2      # one blank gap row
+    subject_row   = section_row + 1
+    body_row      = subject_row + 1
 
-def save_to_word(data_cards):
-    """
-    Optional fallback documentation generator. Appends social anchors 
-    neatly at the bottom of each structural text section.
-    """
-    pass
+    # Section banner
+    banner = ws.cell(row=section_row, column=1,
+                     value="✉️   DRAFT EMAIL SETTINGS  —  Fill in Subject & Body below, then open draft_engine.exe")
+    banner.fill      = section_fill
+    banner.font      = section_font
+    banner.alignment = left_align
+    banner.border    = section_border
+    ws.merge_cells(start_row=section_row, start_column=1,
+                   end_row=section_row,   end_column=total_cols)
+    ws.row_dimensions[section_row].height = 26
+
+    # MAIL SUBJECT label + input
+    subj_lbl = ws.cell(row=subject_row, column=1, value="MAIL SUBJECT")
+    subj_lbl.fill      = header_fill
+    subj_lbl.font      = header_font
+    subj_lbl.alignment = center_align
+    subj_lbl.border    = cell_border
+
+    subj_inp = ws.cell(row=subject_row, column=2, value="")
+    subj_inp.fill      = input_fill
+    subj_inp.font      = input_font
+    subj_inp.alignment = left_align
+    subj_inp.border    = cell_border
+    ws.merge_cells(start_row=subject_row, start_column=2,
+                   end_row=subject_row,   end_column=total_cols)
+    ws.row_dimensions[subject_row].height = 26
+
+    # MAIL BODY TEMPLATE label + input
+    body_lbl = ws.cell(row=body_row, column=1, value="MAIL BODY\nTEMPLATE")
+    body_lbl.fill      = header_fill
+    body_lbl.font      = header_font
+    body_lbl.alignment = center_align
+    body_lbl.border    = cell_border
+
+    body_inp = ws.cell(row=body_row, column=2, value="")
+    body_inp.fill      = input_fill
+    body_inp.font      = input_font
+    body_inp.alignment = top_left          # top-align for multi-line
+    body_inp.border    = cell_border
+    ws.merge_cells(start_row=body_row, start_column=2,
+                   end_row=body_row,   end_column=total_cols)
+    ws.row_dimensions[body_row].height = 150   # tall for multi-line body
+
+    # ── Save ──────────────────────────────────────────────────────
+    if getattr(sys, 'frozen', False):
+        base_path = os.path.dirname(sys.executable)
+    else:
+        base_path = os.path.dirname(os.path.abspath(__file__))
+
+    filename = os.path.join(base_path, "Time_Vehicle_Leads.xlsx")
+    wb.save(filename)
+    return filename
