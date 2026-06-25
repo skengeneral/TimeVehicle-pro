@@ -122,12 +122,14 @@ def rewrite_body(api_key, body_template, lead):
         f"2. If you reference the business location, use ONLY the exact address provided: '{address}'\n"
         f"3. Do NOT invent, assume, or add any details not explicitly given above\n"
         f"4. If a detail is not provided, simply do not mention it\n"
-        f"5. Naturally mention '{name}' once or twice where it fits organically\n"
-        f"6. Vary sentence structure, vocabulary, and phrasing from the original template\n"
-        f"7. Keep the same core message, intent, tone, and approximate length\n"
-        f"8. Sound professional and human — not AI-generated\n"
-        f"9. Body paragraphs only — no greeting, no sign-off, no subject line\n"
-        f"10. Return ONLY the rewritten body text, nothing else"
+        f"5. When referencing location, always use the format 'your [suburb/city] location' "
+        f"(e.g. 'your Hatfield location') — never infer or describe the business type from the address\n"
+        f"6. Naturally mention '{name}' once or twice where it fits organically\n"
+        f"7. Vary sentence structure, vocabulary, and phrasing from the original template\n"
+        f"8. Keep the same core message, intent, tone, and approximate length\n"
+        f"9. Sound professional and human — not AI-generated\n"
+        f"10. Body paragraphs only — no greeting, no sign-off, no subject line\n"
+        f"11. Return ONLY the rewritten body text, nothing else"
     )
 
     resp = requests.post(
