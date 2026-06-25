@@ -7,7 +7,6 @@ from pathlib import Path
 from email.mime.text import MIMEText
 from openpyxl import load_workbook
 
-# Gmail API
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
@@ -73,7 +72,6 @@ def authenticate_gmail(base_dir=None, progress_callback=None):
     return build("gmail", "v1", credentials=creds)
 
 def get_gmail_profile(base_dir=None):
-    """Returns the connected Gmail address, or None if not yet authorized."""
     token_path = get_token_path(base_dir)
     creds_path = get_credentials_path(base_dir)
     if not token_path.exists() or not creds_path.exists():
@@ -90,23 +88,42 @@ def get_gmail_profile(base_dir=None):
         pass
     return None
 
-# ── Claude API body rewriter ──────────────────────────────────────
-def rewrite_body(api_key, body_template, business_name):
+# ── Claude body rewriter ──────────────────────────────────────────
+def rewrite_body(api_key, body_template, lead):
     """
-    Calls Claude claude-sonnet-4-6 to produce a unique, personalised version
-    of the client's body template for each business/professional.
+    Rewrites the body template uniquely for each business.
+    Uses full lead data (name, rating, address, phone) for
+    rich, context-aware personalisation.
     """
+    name    = lead.get("name",    "")
+    rating  = lead.get("rating",  "")
+    address = lead.get("address", "")
+    phone   = lead.get("phone",   "")
+    website = lead.get("website", "")
+
+    # Build recipient context from available data
+    context_lines = [f"Business name: {name}"]
+    if rating and rating not in ("", "Not Provided", "0"):
+        context_lines.append(f"Google Rating: {rating} ★")
+    if address and address not in ("", "Not Provided"):
+        context_lines.append(f"Address: {address}")
+    if phone and phone not in ("", "Not Provided"):
+        context_lines.append(f"Phone: {phone}")
+    if website and website not in ("", "Not Provided", "No Website"):
+        context_lines.append(f"Website: {website}")
+    context = "\n".join(context_lines)
+
     prompt = (
         f"You are helping a professional send personalised outreach emails.\n\n"
-        f"The recipient is: {business_name}\n\n"
-        f"Original body template:\n---\n{body_template}\n---\n\n"
-        f"Rewrite the body so it is unique and personalised for {business_name}:\n"
-        f"- Naturally mention '{business_name}' once or twice where it fits organically\n"
-        f"- Vary sentence structure, word choices, and phrasing from the original\n"
-        f"- Keep the exact same core message, intent, tone, and approximate length\n"
+        f"Recipient business details:\n{context}\n\n"
+        f"Original email body template:\n---\n{body_template}\n---\n\n"
+        f"Rewrite the body uniquely and personally for {name}:\n"
+        f"- Naturally mention '{name}' once or twice where it fits organically\n"
+        f"- If appropriate, subtly reference their rating, location, or other details\n"
+        f"- Vary sentence structure, vocabulary, and phrasing from the original\n"
+        f"- Keep the same core message, intent, tone, and approximate length\n"
         f"- Sound professional and human — not AI-generated\n"
-        f"- Do NOT add a greeting (Dear...) or sign-off — body paragraphs only\n"
-        f"- Do NOT add a subject line\n"
+        f"- Body paragraphs only — no greeting, no sign-off, no subject line\n"
         f"- Return ONLY the rewritten body text, nothing else"
     )
 
@@ -130,17 +147,25 @@ def rewrite_body(api_key, body_template, business_name):
 
 # ── Gmail draft creator ───────────────────────────────────────────
 def create_draft(service, to_email, subject, body):
-    msg             = MIMEText(body, "plain", "utf-8")
-    msg["to"]       = to_email
-    msg["subject"]  = subject
-    raw             = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
-    draft           = service.users().drafts().create(
+    msg            = MIMEText(body, "plain", "utf-8")
+    msg["to"]      = to_email
+    msg["subject"] = subject
+    raw            = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
+    draft          = service.users().drafts().create(
         userId="me", body={"message": {"raw": raw}}
     ).execute()
     return draft.get("id")
 
 # ── Leads reader ──────────────────────────────────────────────────
-def read_leads(base_dir=None, progress_callback=None):
+def read_leads(base_dir=None, email_selection="ALL", progress_callback=None):
+    """
+    Reads Time_Vehicle_Leads.xlsx and returns selected leads with
+    full business details for rich Claude personalisation.
+
+    email_selection:
+        "ALL"           → every row with a valid email
+        list of strings → only rows whose Email ID is in the list
+    """
     def log(m):
         if progress_callback: progress_callback(m)
 
@@ -148,7 +173,7 @@ def read_leads(base_dir=None, progress_callback=None):
     if not leads_file.exists():
         raise FileNotFoundError(
             "Time_Vehicle_Leads.xlsx not found.\n"
-            "Please run a search first to generate the leads file."
+            "Please run a search first."
         )
 
     wb   = load_workbook(str(leads_file))
@@ -162,8 +187,7 @@ def read_leads(base_dir=None, progress_callback=None):
     subject       = ""
     body_template = ""
     for row in rows:
-        if not row or not row[0]:
-            continue
+        if not row or not row[0]: continue
         label = str(row[0]).strip().upper()
         if "MAIL SUBJECT" in label and len(row) > 1:
             subject = str(row[1] or "").strip()
@@ -181,50 +205,75 @@ def read_leads(base_dir=None, progress_callback=None):
             "Please fill it in Time_Vehicle_Leads.xlsx and save."
         )
 
-    # Pull selected rows
-    header_row     = rows[0]
-    selected_leads = []
-    for row in rows[1:]:
-        if not row or not row[0]:
-            continue
-        if str(row[0]).strip().upper() != "YES":
-            continue
-        lead  = {str(h): v for h, v in zip(header_row, row) if h}
-        email = str(lead.get("Email ID", "") or "").strip()
-        name  = str(lead.get("Business Name", "") or "").strip()
-        if email and email.lower() != "not provided" and "@" in email:
-            selected_leads.append({"name": name, "email": email})
+    # Build filter set if specific emails selected
+    filter_emails = None
+    if email_selection != "ALL":
+        filter_emails = set(e.strip().lower() for e in email_selection if e.strip())
 
-    log(f"📋 {len(selected_leads)} emails selected for drafting")
+    # Extract lead rows with full business data
+    header_row = rows[0]
+    leads      = []
+
+    for row in rows[1:]:
+        if not row or not row[0]: continue
+        label = str(row[0]).strip().upper()
+        # Skip section header rows
+        if any(x in label for x in ["MAIL SUBJECT", "MAIL BODY", "DRAFT EMAIL",
+                                     "✉️", "TEMPLATE"]):
+            continue
+
+        lead    = {str(h): str(v or "").strip() for h, v in zip(header_row, row) if h}
+        email   = lead.get("Email ID", "").strip()
+        name    = lead.get("Business Name", "").strip()
+
+        if not email or email.lower() == "not provided" or "@" not in email:
+            continue
+
+        # Apply email filter if specific selection
+        if filter_emails is not None and email.lower() not in filter_emails:
+            continue
+
+        leads.append({
+            "name":    name,
+            "email":   email,
+            "rating":  lead.get("Google Rating",       ""),
+            "address": lead.get("Complete Address",     ""),
+            "phone":   lead.get("Phone Number",         ""),
+            "website": lead.get("Website Link",         ""),
+            "hours":   lead.get("Operating Hours Matrix",""),
+        })
+
+    log(f"📋 {len(leads)} emails queued for drafting")
     log(f"📝 Subject: {subject}")
-    return selected_leads, subject, body_template
+    return leads, subject, body_template
 
 # ── Main entry point ──────────────────────────────────────────────
-def create_bulk_drafts(base_dir=None, progress_callback=None):
+def create_bulk_drafts(base_dir=None, email_selection="ALL", progress_callback=None):
     """
-    Called from the UI Tab 2 worker thread.
-    Reads Time_Vehicle_Leads.xlsx, rewrites each body with Claude,
-    and creates Gmail drafts for every selected email.
+    Called from Tab 2 DraftWorker.
+    email_selection = "ALL" or a list of specific email strings.
     """
     def log(m):
         if progress_callback: progress_callback(m)
 
-    # 1. API key check
+    # 1. API key
     api_key = get_anthropic_key(base_dir)
     if not api_key:
         raise ValueError(
             "Anthropic API key not found.\n"
-            "Please add your key to anthropic_api.txt and try again."
+            "Please add your key to anthropic_api.txt."
         )
 
-    # 2. Read leads + selections
+    # 2. Read leads
     log("📖 Reading Time_Vehicle_Leads.xlsx...")
-    leads, subject, body_template = read_leads(base_dir, progress_callback)
+    leads, subject, body_template = read_leads(
+        base_dir, email_selection, progress_callback
+    )
 
     if not leads:
         raise ValueError(
-            "No emails selected.\n"
-            "Please set SELECT = Yes on at least one row in Time_Vehicle_Leads.xlsx."
+            "No matching emails found.\n"
+            "Check that the email addresses exist in the leads file."
         )
 
     log("")
@@ -236,7 +285,7 @@ def create_bulk_drafts(base_dir=None, progress_callback=None):
     log(f"🚀 Creating {len(leads)} personalised drafts...")
     log("─" * 50)
 
-    # 4. Draft creation loop
+    # 4. Draft loop
     created = 0
     failed  = 0
 
@@ -245,11 +294,11 @@ def create_bulk_drafts(base_dir=None, progress_callback=None):
         email = lead["email"]
         try:
             log(f"✍️  [{i}/{len(leads)}] Personalising for: {name}")
-            unique_body = rewrite_body(api_key, body_template, name)
+            unique_body = rewrite_body(api_key, body_template, lead)
             create_draft(service, email, subject, unique_body)
             created += 1
             log(f"   ✅ Draft → {email}")
-            time.sleep(0.3)          # gentle rate limiting
+            time.sleep(0.3)
         except Exception as e:
             failed += 1
             log(f"   ❌ Failed ({email}): {str(e)[:80]}")
