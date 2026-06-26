@@ -191,26 +191,27 @@ def create_draft(service, to_email, subject, body):
     return draft.get("id")
 
 # ── Leads reader ──────────────────────────────────────────────────
-def read_leads(base_dir=None, email_selection="ALL", progress_callback=None):
+def read_leads(base_dir=None, email_selection="ALL", progress_callback=None, leads_file=None):
     """
-    Reads Time_Vehicle_Leads.xlsx and returns selected leads with
-    full business details for rich Claude personalisation.
-
-    email_selection:
-        "ALL"           → every row with a valid email
-        list of strings → only rows whose Email ID is in the list
+    Reads the leads Excel file and returns selected leads with full data.
+    leads_file: exact path if client browsed for a file; otherwise
+                uses Time_Vehicle_Leads.xlsx from base_dir.
     """
     def log(m):
         if progress_callback: progress_callback(m)
 
-    leads_file = _base(base_dir) / "Time_Vehicle_Leads.xlsx"
-    if not leads_file.exists():
+    if leads_file:
+        leads_path = Path(leads_file)
+    else:
+        leads_path = _base(base_dir) / "Time_Vehicle_Leads.xlsx"
+
+    if not leads_path.exists():
         raise FileNotFoundError(
-            "Time_Vehicle_Leads.xlsx not found.\n"
-            "Please run a search first."
+            f"Leads file not found: {leads_path}\n"
+            "Please select a valid file or run a search first."
         )
 
-    wb   = load_workbook(str(leads_file))
+    wb   = load_workbook(str(leads_path))
     ws   = wb.active
     rows = list(ws.iter_rows(values_only=True))
 
@@ -282,11 +283,14 @@ def read_leads(base_dir=None, email_selection="ALL", progress_callback=None):
     return leads, subject, body_template
 
 # ── Main entry point ──────────────────────────────────────────────
-def create_bulk_drafts(base_dir=None, email_selection="ALL", draft_mode="AI", progress_callback=None):
+def create_bulk_drafts(base_dir=None, email_selection="ALL", draft_mode="AI",
+                       leads_file=None, progress_callback=None):
     """
     Called from Tab 2 DraftWorker.
-    draft_mode: "AI"     → Claude rewrites body uniquely per email
-                "MANUAL" → template used as-is with (Placeholder) replacements
+    draft_mode:  "AI"     → Claude rewrites body uniquely per email
+                 "MANUAL" → template used as-is with (Placeholder) replacements
+    leads_file:  exact path to Excel file (if client browsed); otherwise
+                 uses Time_Vehicle_Leads.xlsx from base_dir.
     """
     def log(m):
         if progress_callback: progress_callback(m)
@@ -303,9 +307,9 @@ def create_bulk_drafts(base_dir=None, email_selection="ALL", draft_mode="AI", pr
             )
 
     # 2. Read leads
-    log("📖 Reading Time_Vehicle_Leads.xlsx...")
+    log("📖 Reading leads file...")
     leads, subject, body_template = read_leads(
-        base_dir, email_selection, progress_callback
+        base_dir, email_selection, progress_callback, leads_file
     )
 
     if not leads:
