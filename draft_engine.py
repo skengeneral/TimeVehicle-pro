@@ -157,8 +157,12 @@ def rewrite_body(api_key, body_template, lead):
         f"7. Vary sentence structure, vocabulary, and phrasing from the original template\n"
         f"8. Keep the same core message, intent, tone, and approximate length\n"
         f"9. Sound professional and human — not AI-generated\n"
-        f"10. Body paragraphs only — no greeting, no sign-off, no subject line\n"
-        f"11. Return ONLY the rewritten body text, nothing else"
+        f"10. If the template includes a greeting (e.g. 'Dear...', 'Hi...', 'Hello...'), "
+        f"keep it and personalise it using '{name}'\n"
+        f"11. If the template includes a sign-off (e.g. 'Thanks and regards, [Name]'), "
+        f"preserve it EXACTLY as written — do not change a single word\n"
+        f"12. Do NOT add a subject line\n"
+        f"13. Return ONLY the complete rewritten email body including greeting and sign-off, nothing else"
     )
 
     resp = requests.post(
