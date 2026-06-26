@@ -155,13 +155,11 @@ def extract_contact_metrics_from_website(playwright_instance, website_url, progr
     def log(msg):
         if progress_callback: progress_callback(msg)
 
-    socials = {
-        "Facebook": "Not Provided", "Instagram": "Not Provided", 
-        "LinkedIn": "Not Provided", "Twitter/X": "Not Provided",
+    contact_data = {
         "Email ID": "Not Provided"
     }
     if not website_url or "No Website" in website_url or not website_url.startswith("http"):
-        return socials
+        return contact_data
 
     # Keep the original URL so we can fall back to it if https fails
     original_url = website_url
@@ -188,22 +186,12 @@ def extract_contact_metrics_from_website(playwright_instance, website_url, progr
 
         if not homepage_html:
             browser.close()
-            return socials
+            return contact_data
             
         found_email = extract_emails_from_text(homepage_html)
-        if found_email: socials["Email ID"] = found_email
-            
-        fb_match = re.search(r'href=["\'](https?://(?:www\.)?facebook\.com/[a-zA-Z0-9_\-\.]+)/?["\']', homepage_html, re.IGNORECASE)
-        ig_match = re.search(r'href=["\'](https?://(?:www\.)?instagram\.com/[a-zA-Z0-9_\-\.]+)/?["\']', homepage_html, re.IGNORECASE)
-        li_match = re.search(r'href=["\'](https?://(?:www\.)?linkedin\.com/(?:in|company)/[a-zA-Z0-9_\-\.]+)/?["\']', homepage_html, re.IGNORECASE)
-        tw_match = re.search(r'href=["\'](https?://(?:www\.)?(?:twitter|x)\.com/[a-zA-Z0-9_\-\.]+)/?["\']', homepage_html, re.IGNORECASE)
+        if found_email: contact_data["Email ID"] = found_email
         
-        if fb_match: socials["Facebook"] = fb_match.group(1)
-        if ig_match: socials["Instagram"] = ig_match.group(1)
-        if li_match: socials["LinkedIn"] = li_match.group(1)
-        if tw_match: socials["Twitter/X"] = tw_match.group(1)
-        
-        if socials["Email ID"] == "Not Provided":
+        if contact_data["Email ID"] == "Not Provided":
             contact_links = set()
             raw_links = re.findall(r'href\s*=\s*["\']([^"\']+)["\']', homepage_html, re.IGNORECASE)
             for link in raw_links:
@@ -224,11 +212,11 @@ def extract_contact_metrics_from_website(playwright_instance, website_url, progr
                     if subpage_html:
                         sub_email = extract_emails_from_text(subpage_html)
                         if sub_email:
-                            socials["Email ID"] = sub_email
+                            contact_data["Email ID"] = sub_email
                             break
         browser.close()
     except: pass
-    return socials
+    return contact_data
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -376,17 +364,13 @@ def extract_local_leads(search_query, allowed_ratings, target_city=None, progres
                     )
                     
                     lead_card = {
-                        "Business Name":     title,
-                        "Google Rating":     rating_val,
-                        "Complete Address":  full_address,
-                        "Operating Hours Matrix": hours_string,
-                        "Website Link":      website_link,
-                        "Email ID":          email_id,
-                        "Phone Number":      biz.get("phone") or "Not Provided",
-                        "Facebook Handle":   found_metrics["Facebook"],
-                        "Instagram Handle":  found_metrics["Instagram"],
-                        "LinkedIn Handle":   found_metrics["LinkedIn"],
-                        "Twitter/X Handle":  found_metrics["Twitter/X"]
+                        "Business Name":          title,
+                        "Google Rating":          rating_val,
+                        "Complete Address":        full_address,
+                        "Operating Hours Matrix":  hours_string,
+                        "Website Link":            website_link,
+                        "Email ID":               email_id,
+                        "Phone Number":            biz.get("phone") or "Not Provided",
                     }
                     filtered_leads.append(lead_card)
 
