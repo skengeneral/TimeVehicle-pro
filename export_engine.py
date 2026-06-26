@@ -33,8 +33,7 @@ def save_to_excel(data, columns_layout=None):
     headers = [
         "Business Name", "Google Rating", "Complete Address",
         "Operating Hours Matrix", "Website Link", "Email ID",
-        "Phone Number", "Facebook Handle", "Instagram Handle",
-        "LinkedIn Handle", "Twitter/X Handle"
+        "Phone Number"
     ]
     total_cols = len(headers)
 
