@@ -88,6 +88,35 @@ def get_gmail_profile(base_dir=None):
         pass
     return None
 
+# ── Manual mode placeholder replacer ─────────────────────────────
+def apply_manual_template(body_template, lead):
+    """
+    Replaces (Placeholder) tags in the body template with actual
+    lead data from Excel. No Claude API call — zero cost.
+
+    Supported placeholders:
+        (Business Name)     → lead name
+        (Complete Address)  → full address
+        (Google Rating)     → star rating
+        (Phone Number)      → phone
+        (Website Link)      → website URL
+        (Email ID)          → email address
+    """
+    mapping = {
+        "(Business Name)":    lead.get("name",    ""),
+        "(Complete Address)": lead.get("address", ""),
+        "(Google Rating)":    lead.get("rating",  ""),
+        "(Phone Number)":     lead.get("phone",   ""),
+        "(Website Link)":     lead.get("website", ""),
+        "(Email ID)":         lead.get("email",   ""),
+    }
+    result = body_template
+    for placeholder, value in mapping.items():
+        if value and value not in ("Not Provided", "No Website", ""):
+            result = result.replace(placeholder, value)
+    return result
+
+
 # ── Claude body rewriter ──────────────────────────────────────────
 def rewrite_body(api_key, body_template, lead):
     """
@@ -253,21 +282,25 @@ def read_leads(base_dir=None, email_selection="ALL", progress_callback=None):
     return leads, subject, body_template
 
 # ── Main entry point ──────────────────────────────────────────────
-def create_bulk_drafts(base_dir=None, email_selection="ALL", progress_callback=None):
+def create_bulk_drafts(base_dir=None, email_selection="ALL", draft_mode="AI", progress_callback=None):
     """
     Called from Tab 2 DraftWorker.
-    email_selection = "ALL" or a list of specific email strings.
+    draft_mode: "AI"     → Claude rewrites body uniquely per email
+                "MANUAL" → template used as-is with (Placeholder) replacements
     """
     def log(m):
         if progress_callback: progress_callback(m)
 
-    # 1. API key
-    api_key = get_anthropic_key(base_dir)
-    if not api_key:
-        raise ValueError(
-            "Anthropic API key not found.\n"
-            "Please add your key to anthropic_api.txt."
-        )
+    # 1. API key — only needed for AI mode
+    api_key = None
+    if draft_mode == "AI":
+        api_key = get_anthropic_key(base_dir)
+        if not api_key:
+            raise ValueError(
+                "Anthropic API key not found.\n"
+                "Please add your key to anthropic_api.txt,\n"
+                "or switch to Manual mode which requires no API key."
+            )
 
     # 2. Read leads
     log("📖 Reading Time_Vehicle_Leads.xlsx...")
@@ -281,13 +314,15 @@ def create_bulk_drafts(base_dir=None, email_selection="ALL", progress_callback=N
             "Check that the email addresses exist in the leads file."
         )
 
+    mode_label = "AI personalisation" if draft_mode == "AI" else "Manual template"
+    log(f"✉️  Mode: {mode_label}")
     log("")
 
     # 3. Gmail auth
     log("🔐 Connecting to Gmail...")
     service = authenticate_gmail(base_dir, progress_callback)
     log("")
-    log(f"🚀 Creating {len(leads)} personalised drafts...")
+    log(f"🚀 Creating {len(leads)} drafts...")
     log("─" * 50)
 
     # 4. Draft loop
@@ -298,9 +333,14 @@ def create_bulk_drafts(base_dir=None, email_selection="ALL", progress_callback=N
         name  = lead["name"]
         email = lead["email"]
         try:
-            log(f"✍️  [{i}/{len(leads)}] Personalising for: {name}")
-            unique_body = rewrite_body(api_key, body_template, lead)
-            create_draft(service, email, subject, unique_body)
+            if draft_mode == "AI":
+                log(f"✍️  [{i}/{len(leads)}] AI personalising for: {name}")
+                final_body = rewrite_body(api_key, body_template, lead)
+            else:
+                log(f"✍️  [{i}/{len(leads)}] Preparing draft for: {name}")
+                final_body = apply_manual_template(body_template, lead)
+
+            create_draft(service, email, subject, final_body)
             created += 1
             log(f"   ✅ Draft → {email}")
             time.sleep(0.3)
