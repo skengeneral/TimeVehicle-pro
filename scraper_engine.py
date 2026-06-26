@@ -232,10 +232,14 @@ def extract_contact_metrics_from_website(playwright_instance, website_url, progr
 #    3. max_pages raised to 10 (up to 200 potential results).
 #    4. progress_callback parameter added for live UI log feed.
 # ─────────────────────────────────────────────────────────────────
-def extract_local_leads(search_query, allowed_ratings, target_city=None, progress_callback=None):
+def extract_local_leads(search_query, allowed_ratings, target_city=None,
+                        progress_callback=None, stop_callback=None):
     def log(msg):
         if progress_callback: progress_callback(msg)
         else: print(msg)
+
+    def should_stop():
+        return stop_callback and stop_callback()
 
     api_key = get_local_api_key()
     if not api_key:
@@ -275,6 +279,20 @@ def extract_local_leads(search_query, allowed_ratings, target_city=None, progres
                     log(f"⚠️ API returned HTTP {response.status_code} — stopping search.")
                     break
                 data = response.json()
+
+                # ── Credit exhaustion check ────────────────────────
+                error_info = data.get("error", "")
+                if error_info:
+                    error_str = str(error_info).lower()
+                    if any(w in error_str for w in ["credit", "limit", "quota", "run out", "exceeded"]):
+                        log(f"")
+                        log(f"💳 SERPAPI CREDITS EXHAUSTED")
+                        log(f"   Your SerpAPI search credits have run out.")
+                        log(f"   {len(filtered_leads)} leads collected before credits ran out.")
+                        log(f"   Please recharge at serpapi.com/plan and search again.")
+                    else:
+                        log(f"⚠️ API error: {error_info}")
+                    break
                 raw_results = data.get("local_results", [])
                 
                 if not raw_results:
@@ -284,6 +302,10 @@ def extract_local_leads(search_query, allowed_ratings, target_city=None, progres
                 log(f"   ↳ {len(raw_results)} listings returned on this page.")
                 
                 for biz in raw_results:
+                    # ── Stop check ─────────────────────────────────
+                    if should_stop():
+                        log("⏹️  Search stopped by user.")
+                        break
                     title = biz.get("title") or biz.get("name") or "Unknown"
                     if title.lower().strip() in processed_titles:
                         continue
@@ -370,6 +392,9 @@ def extract_local_leads(search_query, allowed_ratings, target_city=None, progres
                 # ── Pagination: stop when last page has fewer rows ─────────
                 # Google Maps does not reliably include a "next" pagination
                 # key, so we stop only when results drop below a full page.
+                if should_stop():
+                    break
+
                 if len(raw_results) < results_per_page:
                     log("✅ Received partial page — no more results available.")
                     break
@@ -382,5 +407,8 @@ def extract_local_leads(search_query, allowed_ratings, target_city=None, progres
                 break
 
     log(f"")
-    log(f"🎯 DONE — {len(filtered_leads)} qualified leads collected.")
+    if should_stop():
+        log(f"⏹️  STOPPED — {len(filtered_leads)} leads saved to file.")
+    else:
+        log(f"🎯 DONE — {len(filtered_leads)} qualified leads collected.")
     return {"data": filtered_leads, "columns_layout": None}
