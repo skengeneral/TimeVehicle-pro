@@ -338,24 +338,17 @@ def extract_local_leads(search_query, allowed_ratings, target_city=None, progres
                     website_link = biz.get("website") or "No Website"
                     full_address = biz.get("address", "") or "Not Provided"
                     
-                    log(f"🏢 [{total_leads}] {title}  ★{rating_val}")
-                    
-                    if website_link != "No Website":
-                        log(f"   🌐 Scanning website for contacts...")
+                    log(f"🏢 [{total_leads}] {title}")
                     
                     found_metrics = extract_contact_metrics_from_website(
-                        p, website_link, progress_callback
+                        p, website_link, progress_callback=None   # suppress sub-messages
                     )
                     email_id = found_metrics["Email ID"]
                     
                     if email_id == "Not Provided":
-                        log(f"   🔎 Searching Google for email...")
                         email_id = fetch_email_via_google_search(
                             api_key, title, full_address, target_city
                         )
-                    
-                    email_status = email_id if email_id != "Not Provided" else "—"
-                    log(f"   ✉️  Email: {email_status}")
                     
                     gps_hours = biz.get("operating_hours", {})
                     hours_string = (
