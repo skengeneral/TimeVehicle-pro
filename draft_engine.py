@@ -42,12 +42,6 @@ def authenticate_gmail(base_dir=None, progress_callback=None):
     creds_path = get_credentials_path(base_dir)
     token_path = get_token_path(base_dir)
 
-    if not creds_path.exists():
-        raise FileNotFoundError(
-            "credentials.json not found.\n"
-            "Please contact Time Vehicle support to obtain this file."
-        )
-
     creds = None
     if token_path.exists():
         try:
@@ -55,19 +49,34 @@ def authenticate_gmail(base_dir=None, progress_callback=None):
         except Exception:
             creds = None
 
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
+    # ── Valid token — no credentials.json needed ──────────────────
+    if creds and creds.valid:
+        return build("gmail", "v1", credentials=creds)
+
+    # ── Expired but refreshable — no credentials.json needed ──────
+    if creds and creds.expired and creds.refresh_token:
+        try:
             log("🔄 Refreshing Gmail session...")
             creds.refresh(Request())
-        else:
-            log("🌐 Opening Gmail sign-in in your browser...")
-            flow = InstalledAppFlow.from_client_secrets_file(
-                str(creds_path), GMAIL_SCOPES
-            )
-            creds = flow.run_local_server(port=0, open_browser=True)
-            log("✅ Gmail authorization granted")
+            token_path.write_text(creds.to_json())
+            return build("gmail", "v1", credentials=creds)
+        except Exception:
+            pass   # fall through to full OAuth below
 
-        token_path.write_text(creds.to_json())
+    # ── No valid token — need credentials.json for OAuth flow ─────
+    if not creds_path.exists():
+        raise FileNotFoundError(
+            "credentials.json not found.\n"
+            "Please contact Time Vehicle support to obtain this file."
+        )
+
+    log("🌐 Opening Gmail sign-in in your browser...")
+    flow = InstalledAppFlow.from_client_secrets_file(
+        str(creds_path), GMAIL_SCOPES
+    )
+    creds = flow.run_local_server(port=0, open_browser=True)
+    log("✅ Gmail authorization granted")
+    token_path.write_text(creds.to_json())
 
     return build("gmail", "v1", credentials=creds)
 
@@ -344,6 +353,7 @@ def create_bulk_drafts(base_dir=None, email_selection="ALL", draft_mode="AI",
             if draft_mode == "AI":
                 log(f"✍️  [{i}/{len(leads)}] AI personalising for: {name}")
                 final_body = rewrite_body(api_key, body_template, lead)
+                log(f"   📝 Body generated — creating draft...")
             else:
                 log(f"✍️  [{i}/{len(leads)}] Preparing draft for: {name}")
                 final_body = apply_manual_template(body_template, lead)
@@ -354,7 +364,7 @@ def create_bulk_drafts(base_dir=None, email_selection="ALL", draft_mode="AI",
             time.sleep(0.3)
         except Exception as e:
             failed += 1
-            log(f"   ❌ Failed ({email}): {str(e)[:80]}")
+            log(f"   ❌ Failed [{i}] ({email}): {str(e)[:100]}")
 
     log("")
     log(f"🎯 DONE — {created} drafts created" +
