@@ -186,6 +186,30 @@ def rewrite_body(api_key, body_template, lead):
         return resp.json()["content"][0]["text"].strip()
     raise Exception(f"Claude API error {resp.status_code}: {resp.text[:200]}")
 
+# ── Draft ID storage ──────────────────────────────────────────────
+def _draft_ids_path(base_dir=None):
+    return _base(base_dir) / "pending_drafts.json"
+
+def save_draft_ids(base_dir, draft_ids):
+    import json
+    _draft_ids_path(base_dir).write_text(json.dumps(draft_ids))
+
+def load_draft_ids(base_dir=None):
+    import json
+    path = _draft_ids_path(base_dir)
+    if not path.exists():
+        return []
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return []
+
+def clear_draft_ids(base_dir=None):
+    try:
+        _draft_ids_path(base_dir).unlink()
+    except Exception:
+        pass
+
 # ── Gmail draft creator ───────────────────────────────────────────
 def create_draft(service, to_email, subject, body):
     msg            = MIMEText(body, "plain", "utf-8")
@@ -343,8 +367,9 @@ def create_bulk_drafts(base_dir=None, email_selection="ALL", draft_mode="AI",
     log("─" * 50)
 
     # 4. Draft loop
-    created = 0
-    failed  = 0
+    created   = 0
+    failed    = 0
+    draft_ids = []   # track IDs for later sending
 
     for i, lead in enumerate(leads, 1):
         name  = lead["name"]
@@ -358,7 +383,9 @@ def create_bulk_drafts(base_dir=None, email_selection="ALL", draft_mode="AI",
                 log(f"✍️  [{i}/{len(leads)}] Preparing draft for: {name}")
                 final_body = apply_manual_template(body_template, lead)
 
-            create_draft(service, email, subject, final_body)
+            draft_id = create_draft(service, email, subject, final_body)
+            if draft_id:
+                draft_ids.append(draft_id)
             created += 1
             log(f"   ✅ Draft → {email}")
             time.sleep(0.3)
@@ -366,8 +393,63 @@ def create_bulk_drafts(base_dir=None, email_selection="ALL", draft_mode="AI",
             failed += 1
             log(f"   ❌ Failed [{i}] ({email}): {str(e)[:100]}")
 
+    # Save draft IDs so client can send them all with one click
+    if draft_ids:
+        save_draft_ids(base_dir, draft_ids)
+
     log("")
     log(f"🎯 DONE — {created} drafts created" +
         (f", {failed} failed" if failed else " — all successful!"))
+    if draft_ids:
+        log(f"📤 Click 'Send Bulk Emails' when ready to send all drafts.")
 
     return {"created": created, "failed": failed, "total": len(leads)}
+
+# ── Send bulk emails ──────────────────────────────────────────────
+def send_bulk_emails(base_dir=None, progress_callback=None):
+    """
+    Sends all drafts created in the last session.
+    Draft IDs are loaded from pending_drafts.json.
+    File is cleared after sending.
+    """
+    def log(m):
+        if progress_callback: progress_callback(m)
+
+    draft_ids = load_draft_ids(base_dir)
+    if not draft_ids:
+        raise ValueError(
+            "No pending drafts found.\n"
+            "Please create drafts first using 'Create Bulk Drafts'."
+        )
+
+    log(f"📧 {len(draft_ids)} drafts queued for sending...")
+    log("🔐 Connecting to Gmail...")
+    service = authenticate_gmail(base_dir, progress_callback)
+    log("")
+    log(f"🚀 Sending {len(draft_ids)} emails...")
+    log("─" * 50)
+
+    sent   = 0
+    failed = 0
+
+    for i, draft_id in enumerate(draft_ids, 1):
+        try:
+            service.users().drafts().send(
+                userId="me",
+                body={"id": draft_id}
+            ).execute()
+            sent += 1
+            log(f"   ✅ [{i}/{len(draft_ids)}] Sent")
+            time.sleep(0.2)
+        except Exception as e:
+            failed += 1
+            log(f"   ❌ [{i}/{len(draft_ids)}] Failed: {str(e)[:80]}")
+
+    # Clear pending drafts after sending
+    clear_draft_ids(base_dir)
+
+    log("")
+    log(f"🎯 DONE — {sent} emails sent" +
+        (f", {failed} failed" if failed else " — all sent successfully!"))
+
+    return {"sent": sent, "failed": failed, "total": len(draft_ids)}
