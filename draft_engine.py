@@ -258,9 +258,10 @@ def read_leads(base_dir=None, email_selection="ALL", progress_callback=None, lea
     if email_selection != "ALL":
         filter_emails = set(e.strip().lower() for e in email_selection if e.strip())
 
-    # Extract lead rows with full business data
-    header_row = rows[0]
-    leads      = []
+    # Extract lead rows with full business data — deduplicated by email
+    header_row  = rows[0]
+    leads       = []
+    seen_emails = set()   # ← tracks processed emails to avoid duplicates
 
     for row in rows[1:]:
         if not row or not row[0]: continue
@@ -276,6 +277,11 @@ def read_leads(base_dir=None, email_selection="ALL", progress_callback=None, lea
 
         if not email or email.lower() == "not provided" or "@" not in email:
             continue
+
+        # Skip duplicate emails — one draft per email address only
+        if email.lower() in seen_emails:
+            continue
+        seen_emails.add(email.lower())
 
         # Apply email filter if specific selection
         if filter_emails is not None and email.lower() not in filter_emails:
