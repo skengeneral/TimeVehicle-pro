@@ -151,27 +151,18 @@ def rewrite_body(api_key, body_template, lead):
     context = "\n".join(context_lines)
 
     prompt = (
-        f"You are helping a professional send personalised outreach emails.\n\n"
-        f"Recipient business details (from verified data — use ONLY these details):\n"
+        f"Rewrite this email body for {name}. "
+        f"Use ONLY these verified details — never use outside knowledge:\n"
         f"{context}\n\n"
-        f"Original email body template:\n---\n{body_template}\n---\n\n"
-        f"STRICT RULES — you must follow all of these without exception:\n"
-        f"1. Use ONLY the business details provided above — never use your own knowledge about this business\n"
-        f"2. If you reference the business location, use ONLY the exact address provided: '{address}'\n"
-        f"3. Do NOT invent, assume, or add any details not explicitly given above\n"
-        f"4. If a detail is not provided, simply do not mention it\n"
-        f"5. When referencing location, always use the format 'your [suburb/city] location' "
-        f"(e.g. 'your Hatfield location') — never infer or describe the business type from the address\n"
-        f"6. Naturally mention '{name}' once or twice where it fits organically\n"
-        f"7. Vary sentence structure, vocabulary, and phrasing from the original template\n"
-        f"8. Keep the same core message, intent, tone, and approximate length\n"
-        f"9. Sound professional and human — not AI-generated\n"
-        f"10. If the template includes a greeting (e.g. 'Dear...', 'Hi...', 'Hello...'), "
-        f"keep it and personalise it using '{name}'\n"
-        f"11. If the template includes a sign-off (e.g. 'Thanks and regards, [Name]'), "
-        f"preserve it EXACTLY as written — do not change a single word\n"
-        f"12. Do NOT add a subject line\n"
-        f"13. Return ONLY the complete rewritten email body including greeting and sign-off, nothing else"
+        f"Original body:\n{body_template}\n\n"
+        f"Rules:\n"
+        f"- Use ONLY the details above. Do not invent anything.\n"
+        f"- Mention '{name}' naturally 1-2 times.\n"
+        f"- If referencing location, use format 'your [suburb] location' e.g. 'your Hatfield location'.\n"
+        f"- Keep the greeting and sign-off exactly as written in the original.\n"
+        f"- Vary sentence structure and wording so each email is unique.\n"
+        f"- Same length, tone, and message as original.\n"
+        f"- Return ONLY the rewritten body. No subject line."
     )
 
     resp = requests.post(
