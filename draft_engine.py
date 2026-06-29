@@ -151,17 +151,20 @@ def rewrite_body(api_key, body_template, lead):
     context = "\n".join(context_lines)
 
     prompt = (
-        f"Rewrite this email body for {name}. "
-        f"Use ONLY these verified details — never use outside knowledge:\n"
+        f"You are helping a sales professional personalise their outreach email.\n\n"
+        f"This email is FROM the sender (the person using this tool).\n"
+        f"This email is being sent TO: {name}\n\n"
+        f"Details about the RECIPIENT ({name}) — use these to personalise naturally:\n"
         f"{context}\n\n"
-        f"Original body:\n{body_template}\n\n"
+        f"The sender's original email template:\n{body_template}\n\n"
         f"Rules:\n"
-        f"- Use ONLY the details above. Do not invent anything.\n"
-        f"- Mention '{name}' naturally 1-2 times.\n"
-        f"- If referencing location, use format 'your [suburb] location' e.g. 'your Hatfield location'.\n"
-        f"- Keep the greeting and sign-off exactly as written in the original.\n"
-        f"- Vary sentence structure and wording so each email is unique.\n"
-        f"- Same length, tone, and message as original.\n"
+        f"- The sender is reaching OUT TO {name} — never reverse this\n"
+        f"- Keep the sender's message, offer, and sign-off exactly as written\n"
+        f"- Mention '{name}' naturally as the recipient 1-2 times\n"
+        f"- Only reference recipient details (address, rating) where naturally relevant\n"
+        f"- If referencing location, use 'your [suburb] location' format\n"
+        f"- Vary sentence structure so each email is unique\n"
+        f"- Do NOT use outside knowledge about {name}\n"
         f"- Return ONLY the rewritten body. No subject line."
     )
 
