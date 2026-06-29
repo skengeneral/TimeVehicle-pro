@@ -167,7 +167,21 @@ def extract_contact_metrics_from_website(playwright_instance, website_url, progr
         website_url = website_url.replace("http://", "https://", 1)
 
     try:
-        browser = playwright_instance.chromium.launch(headless=True, channel="chrome")
+        # Try Chrome first, fall back to Edge — both are pre-installed
+        # on most Windows PCs so no download needed for clients
+        browser = None
+        for channel in ["chrome", "msedge"]:
+            try:
+                browser = playwright_instance.chromium.launch(
+                    headless=True, channel=channel
+                )
+                break
+            except Exception:
+                continue
+        if browser is None:
+            # Last resort — try without specifying a channel (uses bundled Chromium)
+            browser = playwright_instance.chromium.launch(headless=True)
+
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         )
