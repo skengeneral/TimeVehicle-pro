@@ -26,14 +26,57 @@ def get_stored_api_key():
     """Maps directly to local loader to handle dynamic cross-calls flawlessly."""
     return get_local_api_key()
 
+def decode_cloudflare_emails(html_content):
+    """
+    Cloudflare's email obfuscation (very common on WordPress sites and
+    any site behind Cloudflare with email protection enabled) hides
+    emails as: <span data-cfemail="HEXSTRING">[email protected]</span>
+    The hex string is XOR-encoded against its own first byte.
+    This decodes any found instances and appends them as plain text
+    so the normal email regex below can pick them up.
+    """
+    if not html_content or 'data-cfemail' not in html_content:
+        return html_content
+    matches = re.findall(r'data-cfemail="([a-f0-9]+)"', html_content)
+    decoded_emails = []
+    for hex_str in matches:
+        try:
+            r = int(hex_str[:2], 16)
+            decoded = ''.join(
+                chr(int(hex_str[i:i+2], 16) ^ r)
+                for i in range(2, len(hex_str), 2)
+            )
+            if '@' in decoded:
+                decoded_emails.append(decoded)
+        except Exception:
+            continue
+    if decoded_emails:
+        return html_content + " " + " ".join(decoded_emails)
+    return html_content
+
 def extract_emails_from_text(text_content):
     if not text_content:
         return None
+
+    # Decode any Cloudflare-protected emails before scanning
+    text_content = decode_cloudflare_emails(text_content)
+
     email_pattern = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,6}'
     raw_emails = re.findall(email_pattern, text_content)
     
     mailto_emails = re.findall(r'href=["\']mailto:([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,6})', text_content, re.IGNORECASE)
-    all_found = raw_emails + mailto_emails
+
+    # Handle human-readable obfuscation: "info (at) domain (dot) com",
+    # "info[at]domain[dot]com", "info AT domain DOT com" — common on
+    # small business sites trying to dodge basic email scrapers
+    obfuscated_pattern = (
+        r'([a-zA-Z0-9._%+-]+)\s*[\[\(]?\s*(?:at|AT)\s*[\]\)]?\s*'
+        r'([a-zA-Z0-9.-]+)\s*[\[\(]?\s*(?:dot|DOT)\s*[\]\)]?\s*([a-zA-Z]{2,6})'
+    )
+    obfuscated_matches = re.findall(obfuscated_pattern, text_content)
+    obfuscated_emails = [f"{m[0]}@{m[1]}.{m[2]}" for m in obfuscated_matches]
+
+    all_found = raw_emails + mailto_emails + obfuscated_emails
     
     if all_found:
         clean_emails = []
@@ -50,24 +93,43 @@ def extract_emails_from_text(text_content):
             return clean_emails[0]
     return None
 
-def fetch_email_via_google_search(api_key, business_name, full_address=None, target_city=None):
+def fetch_email_via_google_search(api_key, business_name, full_address=None,
+                                   target_city=None, website_url=None):
     """
     Deep email search using Google via SerpAPI.
 
     Query format follows the user-discovered pattern that triggers Google
     AI Overview:  "Business Name, City - email id"
 
-    Two attempts are made before giving up:
+    Three attempts are made before giving up:
       Attempt 1 — AI-optimised format:  "{name}, {city} - email id"
       Attempt 2 — Contact-page format:  "{name} {city} official contact email"
+      Attempt 3 — Site-restricted:      "email site:{domain}"
+                  (only when we know the business's website — searches
+                   Google's index of that exact site, which often
+                   surfaces an email from a contact page even when our
+                   own browser crawler couldn't load the site directly)
 
-    Attempt 2 only runs when Attempt 1 finds nothing, so the extra API
-    credit is only spent on businesses with genuinely hard-to-find emails.
+    Attempts 2 and 3 only run when earlier attempts find nothing, so
+    extra API credits are only spent on businesses with genuinely
+    hard-to-find emails.
 
     Every SerpAPI response field is checked:
       ai_overview → answer_box → knowledge_graph → organic snippets
     """
     endpoint = "https://serpapi.com/search.json"
+
+    # ── Clean business name for search ──────────────────────────────
+    # Google Maps titles often include marketing suffixes after a dash
+    # or pipe, e.g. "SF Custom Chiropractic - #1 Chiropractor Fisherman's
+    # Wharf Russian Hill". These long descriptive titles break the
+    # AI Overview trigger and hurt search relevance, so we use only
+    # the core business name (before the first " - " or "|").
+    clean_name = business_name
+    for separator in [" - ", " – ", " — ", " | "]:
+        if separator in clean_name:
+            clean_name = clean_name.split(separator)[0].strip()
+            break
 
     # ── Extract just the city name ─────────────────────────────────
     # target_city arrives as e.g. "Ottawa, Ontario, Canada" or "New York, NY, USA"
@@ -122,36 +184,89 @@ def fetch_email_via_google_search(api_key, business_name, full_address=None, tar
         return None
 
     # ── Attempt 1: AI-mode optimised query (user-specified format) ─
-    query_1 = f"{business_name}, {city_only} - email id"
+    query_1 = f"{clean_name}, {city_only} - email id"
     result = _search_and_extract(query_1)
     if result:
         return result
 
     # ── Attempt 2: Contact-page fallback (only if Attempt 1 failed) ─
-    query_2 = f"{business_name} {city_only} official contact email"
+    query_2 = f"{clean_name} {city_only} official contact email"
     result = _search_and_extract(query_2)
     if result:
         return result
 
+    # ── Attempt 3: Site-restricted search (only if website is known) ─
+    # Searches Google's index of the exact website domain — this often
+    # finds an email from a contact/about page even when our own
+    # browser crawler failed to load the site (slow, JS-heavy, or
+    # blocking automated browsers).
+    if website_url and website_url not in ("No Website", "", None):
+        try:
+            domain = urlparse(
+                website_url if website_url.startswith("http") else f"https://{website_url}"
+            ).netloc.replace("www.", "")
+        except Exception:
+            domain = ""
+        if domain:
+            query_3 = f"email site:{domain}"
+            result = _search_and_extract(query_3)
+            if result:
+                return result
+
     return "Not Provided"
+
+
+def launch_shared_browser(playwright_instance, progress_callback=None):
+    """
+    Launches ONE browser for the entire search session, reused across
+    every business. Previously a brand new browser was launched and
+    closed for every single business (~100 times per search) — slow,
+    resource-heavy, and a much larger surface area for silent failures.
+    Tries Chrome first, then Edge, then bundled Chromium as last resort.
+    """
+    def log(m):
+        if progress_callback: progress_callback(m)
+
+    for channel in ["chrome", "msedge"]:
+        try:
+            browser = playwright_instance.chromium.launch(headless=True, channel=channel)
+            log(f"🌐 Using {channel.capitalize()} for website scanning")
+            return browser
+        except Exception:
+            continue
+    try:
+        browser = playwright_instance.chromium.launch(headless=True)
+        log("🌐 Using bundled Chromium for website scanning")
+        return browser
+    except Exception as e:
+        log(f"⚠️ Could not launch any browser — website scanning disabled this session: {str(e)[:80]}")
+        return None
 
 
 def scrape_page_with_browser(browser_context, target_url):
     try:
         page = browser_context.new_page()
         page.set_viewport_size({"width": 1280, "height": 800})
-        response = page.goto(target_url, timeout=12000, wait_until="load")
+        # "domcontentloaded" is more forgiving than "load" for slow or
+        # JS-heavy sites — we just need the HTML structure, not every
+        # asset to finish loading. Timeout raised from 12s to 20s to
+        # accommodate slower small-business websites.
+        response = page.goto(target_url, timeout=20000, wait_until="domcontentloaded")
         if not response or response.status != 200:
             page.close()
             return None
-        time.sleep(1)
+        time.sleep(1.5)
         rendered_content = page.content()
         page.close()
         return rendered_content
     except:
         return None
 
-def extract_contact_metrics_from_website(playwright_instance, website_url, progress_callback=None):
+def extract_contact_metrics_from_website(browser, website_url, progress_callback=None):
+    """
+    browser: a single shared Playwright browser instance (launched once
+             per search session) — NOT relaunched per business.
+    """
     def log(msg):
         if progress_callback: progress_callback(msg)
 
@@ -161,27 +276,16 @@ def extract_contact_metrics_from_website(playwright_instance, website_url, progr
     if not website_url or "No Website" in website_url or not website_url.startswith("http"):
         return contact_data
 
+    if browser is None:
+        return contact_data   # no browser available this session
+
     # Keep the original URL so we can fall back to it if https fails
     original_url = website_url
     if website_url.startswith("http://"):
         website_url = website_url.replace("http://", "https://", 1)
 
+    context = None
     try:
-        # Try Chrome first, fall back to Edge — both are pre-installed
-        # on most Windows PCs so no download needed for clients
-        browser = None
-        for channel in ["chrome", "msedge"]:
-            try:
-                browser = playwright_instance.chromium.launch(
-                    headless=True, channel=channel
-                )
-                break
-            except Exception:
-                continue
-        if browser is None:
-            # Last resort — try without specifying a channel (uses bundled Chromium)
-            browser = playwright_instance.chromium.launch(headless=True)
-
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         )
@@ -193,13 +297,13 @@ def extract_contact_metrics_from_website(playwright_instance, website_url, progr
         # If the forced-HTTPS version fails, quietly retry with the
         # original HTTP URL rather than abandoning the scrape entirely.
         if not homepage_html and original_url != website_url:
-            log("   ↩️  HTTPS unreachable — retrying on HTTP...")
             homepage_html = scrape_page_with_browser(context, original_url)
             if homepage_html:
                 website_url = original_url   # keep http for subpage links too
 
         if not homepage_html:
-            browser.close()
+            log(f"   🌐 Website unreachable — could not load page")
+            context.close()
             return contact_data
             
         found_email = extract_emails_from_text(homepage_html)
@@ -228,8 +332,14 @@ def extract_contact_metrics_from_website(playwright_instance, website_url, progr
                         if sub_email:
                             contact_data["Email ID"] = sub_email
                             break
-        browser.close()
-    except: pass
+            if contact_data["Email ID"] == "Not Provided":
+                log(f"   🌐 Website scanned — no email found on homepage or contact pages")
+        context.close()
+    except Exception as e:
+        log(f"   🌐 Website scan error: {str(e)[:80]}")
+        if context:
+            try: context.close()
+            except: pass
     return contact_data
 
 
@@ -269,6 +379,8 @@ def extract_local_leads(search_query, allowed_ratings, target_city=None,
     total_leads = 0
 
     with sync_playwright() as p:
+        shared_browser = launch_shared_browser(p, progress_callback)
+
         while current_page <= max_pages:
             start_offset = (current_page - 1) * results_per_page
             full_search_string = (
@@ -377,13 +489,13 @@ def extract_local_leads(search_query, allowed_ratings, target_city=None,
                     log(f"🏢 [{total_leads}] {title}")
                     
                     found_metrics = extract_contact_metrics_from_website(
-                        p, website_link, progress_callback=None   # suppress sub-messages
+                        shared_browser, website_link, progress_callback
                     )
                     email_id = found_metrics["Email ID"]
                     
                     if email_id == "Not Provided":
                         email_id = fetch_email_via_google_search(
-                            api_key, title, full_address, target_city
+                            api_key, title, full_address, target_city, website_link
                         )
                     
                     gps_hours = biz.get("operating_hours", {})
@@ -419,6 +531,10 @@ def extract_local_leads(search_query, allowed_ratings, target_city=None,
             except Exception as e:
                 log(f"❌ Error on page {current_page}: {str(e)}")
                 break
+
+        if shared_browser:
+            try: shared_browser.close()
+            except: pass
 
     log(f"")
     if should_stop():
