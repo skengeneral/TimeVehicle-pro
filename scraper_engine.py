@@ -119,6 +119,46 @@ def fetch_email_via_google_search(api_key, business_name, full_address=None,
     """
     endpoint = "https://serpapi.com/search.json"
 
+    # ── Detect target country for geo-targeting ──────────────────────
+    # AI Overview rollout and result relevance both depend on the gl
+    # (country) parameter. Hardcoding "us" would skew results for
+    # clients searching in Canada, UK, Australia, India, etc. — so we
+    # detect the country from whatever location info is available and
+    # fall back to "us" only when nothing can be determined.
+    COUNTRY_CODES = {
+        "usa": "us", "united states": "us", "america": "us",
+        "canada": "ca",
+        "uk": "gb", "united kingdom": "gb", "england": "gb",
+        "scotland": "gb", "wales": "gb", "northern ireland": "gb",
+        "australia": "au",
+        "new zealand": "nz",
+        "ireland": "ie",
+        "india": "in",
+        "south africa": "za",
+        "singapore": "sg",
+        "philippines": "ph",
+        "malaysia": "my",
+        "nigeria": "ng",
+        "kenya": "ke",
+        "pakistan": "pk",
+        "uae": "ae", "united arab emirates": "ae",
+        "jamaica": "jm",
+        "trinidad": "tt", "trinidad and tobago": "tt",
+        "ghana": "gh",
+        "zimbabwe": "zw",
+        "malta": "mt",
+        "fiji": "fj",
+        "sri lanka": "lk",
+        "bangladesh": "bd",
+        "hong kong": "hk",
+    }
+    location_text = f"{target_city or ''} {full_address or ''}".lower()
+    detected_gl = "us"   # sensible default — AI Overview triggers most reliably here
+    for country_name, code in COUNTRY_CODES.items():
+        if country_name in location_text:
+            detected_gl = code
+            break
+
     # ── Clean business name for search ──────────────────────────────
     # Google Maps titles often include marketing suffixes after a dash
     # or pipe, e.g. "SF Custom Chiropractic - #1 Chiropractor Fisherman's
@@ -146,7 +186,13 @@ def fetch_email_via_google_search(api_key, business_name, full_address=None,
 
     def _search_and_extract(query):
         """Run one SerpAPI Google search and scan every result field for an email."""
-        params = {"engine": "google", "q": query, "api_key": api_key}
+        params = {
+            "engine": "google",
+            "q": query,
+            "api_key": api_key,
+            "hl": "en",          # English UI — appropriate for English-speaking markets
+            "gl": detected_gl,   # geo-targeted to the business's actual country
+        }
         try:
             resp = requests.get(endpoint, params=params, timeout=15)
             if resp.status_code != 200:
@@ -156,8 +202,29 @@ def fetch_email_via_google_search(api_key, business_name, full_address=None,
             # 1. Google AI Overview — where AI-mode answers surface
             ai_overview = data.get("ai_overview", {})
             if ai_overview:
-                found = extract_emails_from_text(str(ai_overview))
-                if found: return found
+                # Google sometimes defers AI Overview generation and only
+                # returns a page_token instead of the actual content. In
+                # that case we must make a follow-up call to retrieve the
+                # real text — without this, the ai_overview block is just
+                # an empty shell with no usable text to extract from.
+                if "page_token" in ai_overview:
+                    try:
+                        followup_params = {
+                            "engine": "google_ai_overview",
+                            "page_token": ai_overview["page_token"],
+                            "api_key": api_key,
+                        }
+                        followup_resp = requests.get(endpoint, params=followup_params, timeout=15)
+                        if followup_resp.status_code == 200:
+                            followup_data = followup_resp.json()
+                            full_overview = followup_data.get("ai_overview", followup_data)
+                            found = extract_emails_from_text(str(full_overview))
+                            if found: return found
+                    except Exception:
+                        pass
+                else:
+                    found = extract_emails_from_text(str(ai_overview))
+                    if found: return found
 
             # 2. Answer box (featured snippets, direct answers)
             answer_box = data.get("answer_box", {})
@@ -183,14 +250,18 @@ def fetch_email_via_google_search(api_key, business_name, full_address=None,
             pass
         return None
 
-    # ── Attempt 1: AI-mode optimised query (user-specified format) ─
+    # ── Attempt 1: AI-mode optimised query ──────────────────────────
     query_1 = f"{clean_name}, {city_only} - email id"
     result = _search_and_extract(query_1)
     if result:
         return result
 
-    # ── Attempt 2: Contact-page fallback (only if Attempt 1 failed) ─
-    query_2 = f"{clean_name} {city_only} official contact email"
+    # ── Attempt 2: Second AI-mode query, different phrasing ─────────
+    # If the first AI-mode-style query didn't trigger an overview or
+    # didn't surface an email, try a differently worded query that
+    # still follows the short, direct phrasing that reliably triggers
+    # Google's AI Overview (as opposed to a long descriptive sentence).
+    query_2 = f"{clean_name}, {city_only} - what is their email address"
     result = _search_and_extract(query_2)
     if result:
         return result
@@ -212,6 +283,12 @@ def fetch_email_via_google_search(api_key, business_name, full_address=None,
             result = _search_and_extract(query_3)
             if result:
                 return result
+
+    # ── Attempt 4: Generic contact-page organic fallback ────────────
+    query_4 = f"{clean_name} {city_only} official contact email"
+    result = _search_and_extract(query_4)
+    if result:
+        return result
 
     return "Not Provided"
 
