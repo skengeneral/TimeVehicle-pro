@@ -102,10 +102,13 @@ def fetch_email_via_google_search(api_key, business_name, full_address=None,
     AI Overview:  "Business Name, City - email id"
 
     Four attempts are made before giving up:
-      Attempt 1 — AI-mode query:        "{name}, {city} - email id"
-      Attempt 2 — Second AI-mode query: "{name}, {city} - what is their email address"
-                  (differently worded in case the first phrasing didn't
-                   trigger an AI Overview for this specific business)
+      Attempt 1 — Classic AI Overview: "{name}, {city} - email id"
+      Attempt 2 — Real Google AI Mode: "What is the email address of
+                  {name} in {city}?" — uses SerpAPI's dedicated
+                  google_ai_mode engine, the same conversational AI
+                  Mode tab available manually in Google search (distinct
+                  from and more capable than the classic AI Overview
+                  snippet used in Attempt 1)
       Attempt 3 — Site-restricted:      "email site:{domain}"
                   (only when we know the business's website — searches
                    Google's index of that exact site, which often
@@ -187,85 +190,108 @@ def fetch_email_via_google_search(api_key, business_name, full_address=None,
     if not city_only:
         city_only = "USA"
 
-    def _search_and_extract(query):
-        """Run one SerpAPI Google search and scan every result field for an email."""
+    def _search_and_extract(query, engine="google"):
+        """
+        Run one SerpAPI search and scan every result field for an email.
+        engine="google"        → classic search (AI Overview, answer box,
+                                  knowledge graph, organic results)
+        engine="google_ai_mode" → SerpAPI's dedicated Google AI Mode engine
+                                  — the actual conversational AI Mode tab,
+                                  distinct from the classic AI Overview
+                                  snippet. This is what manually clicking
+                                  into Google's AI Mode and asking a direct
+                                  question uses, and it can successfully
+                                  answer questions the classic AI Overview
+                                  never triggers for.
+        """
         params = {
-            "engine": "google",
+            "engine": engine,
             "q": query,
             "api_key": api_key,
             "hl": "en",          # English UI — appropriate for English-speaking markets
             "gl": detected_gl,   # geo-targeted to the business's actual country
         }
         try:
-            resp = requests.get(endpoint, params=params, timeout=15)
+            resp = requests.get(endpoint, params=params, timeout=20)
             if resp.status_code != 200:
                 return None
             data = resp.json()
 
-            # 1. Google AI Overview — where AI-mode answers surface
-            ai_overview = data.get("ai_overview", {})
-            if ai_overview:
-                # Google sometimes defers AI Overview generation and only
-                # returns a page_token instead of the actual content. In
-                # that case we must make a follow-up call to retrieve the
-                # real text — without this, the ai_overview block is just
-                # an empty shell with no usable text to extract from.
-                if "page_token" in ai_overview:
-                    try:
-                        followup_params = {
-                            "engine": "google_ai_overview",
-                            "page_token": ai_overview["page_token"],
-                            "api_key": api_key,
-                        }
-                        followup_resp = requests.get(endpoint, params=followup_params, timeout=15)
-                        if followup_resp.status_code == 200:
-                            followup_data = followup_resp.json()
-                            full_overview = followup_data.get("ai_overview", followup_data)
-                            found = extract_emails_from_text(str(full_overview))
-                            if found: return found
-                    except Exception:
-                        pass
-                else:
-                    found = extract_emails_from_text(str(ai_overview))
+            if engine == "google":
+                # 1. Google AI Overview — where AI-mode answers surface
+                ai_overview = data.get("ai_overview", {})
+                if ai_overview:
+                    # Google sometimes defers AI Overview generation and only
+                    # returns a page_token instead of the actual content. In
+                    # that case we must make a follow-up call to retrieve the
+                    # real text — without this, the ai_overview block is just
+                    # an empty shell with no usable text to extract from.
+                    if "page_token" in ai_overview:
+                        try:
+                            followup_params = {
+                                "engine": "google_ai_overview",
+                                "page_token": ai_overview["page_token"],
+                                "api_key": api_key,
+                            }
+                            followup_resp = requests.get(endpoint, params=followup_params, timeout=15)
+                            if followup_resp.status_code == 200:
+                                followup_data = followup_resp.json()
+                                full_overview = followup_data.get("ai_overview", followup_data)
+                                found = extract_emails_from_text(str(full_overview))
+                                if found: return found
+                        except Exception:
+                            pass
+                    else:
+                        found = extract_emails_from_text(str(ai_overview))
+                        if found: return found
+
+                # 2. Answer box (featured snippets, direct answers)
+                answer_box = data.get("answer_box", {})
+                ab_text = str(answer_box.get("answer") or answer_box.get("snippet") or "")
+                found = extract_emails_from_text(ab_text)
+                if found: return found
+
+                # 3. Knowledge graph (business panels)
+                found = extract_emails_from_text(str(data.get("knowledge_graph", {})))
+                if found: return found
+
+                # 4. Organic result snippets + rich snippets
+                for result in data.get("organic_results", [])[:5]:
+                    combined = (
+                        result.get("snippet", "") + " " +
+                        str(result.get("rich_snippet", "")) + " " +
+                        str(result.get("sitelinks", ""))
+                    )
+                    found = extract_emails_from_text(combined)
                     if found: return found
 
-            # 2. Answer box (featured snippets, direct answers)
-            answer_box = data.get("answer_box", {})
-            ab_text = str(answer_box.get("answer") or answer_box.get("snippet") or "")
-            found = extract_emails_from_text(ab_text)
+            # ── Catch-all: scan the ENTIRE raw response ──────────────
+            # Covers the Google AI Mode response (whose exact JSON shape
+            # may include text_blocks, answer text, citations, etc. in
+            # varying structures) and any other field not explicitly
+            # mapped above — without needing to know its precise shape
+            # in advance.
+            found = extract_emails_from_text(str(data))
             if found: return found
-
-            # 3. Knowledge graph (business panels)
-            found = extract_emails_from_text(str(data.get("knowledge_graph", {})))
-            if found: return found
-
-            # 4. Organic result snippets + rich snippets
-            for result in data.get("organic_results", [])[:5]:
-                combined = (
-                    result.get("snippet", "") + " " +
-                    str(result.get("rich_snippet", "")) + " " +
-                    str(result.get("sitelinks", ""))
-                )
-                found = extract_emails_from_text(combined)
-                if found: return found
 
         except Exception:
             pass
         return None
 
-    # ── Attempt 1: AI-mode optimised query ──────────────────────────
+    # ── Attempt 1: AI-mode optimised query (classic AI Overview) ────
     query_1 = f"{clean_name}, {city_only} - email id"
-    result = _search_and_extract(query_1)
+    result = _search_and_extract(query_1, engine="google")
     if result:
         return result
 
-    # ── Attempt 2: Second AI-mode query, different phrasing ─────────
-    # If the first AI-mode-style query didn't trigger an overview or
-    # didn't surface an email, try a differently worded query that
-    # still follows the short, direct phrasing that reliably triggers
-    # Google's AI Overview (as opposed to a long descriptive sentence).
-    query_2 = f"{clean_name}, {city_only} - what is their email address"
-    result = _search_and_extract(query_2)
+    # ── Attempt 2: Real Google AI Mode — direct question ─────────────
+    # Uses SerpAPI's dedicated google_ai_mode engine, which is the same
+    # conversational AI Mode experience available in the Google AI Mode
+    # tab manually. This is genuinely more capable than the classic AI
+    # Overview snippet and can answer direct questions it never
+    # triggers for.
+    query_2 = f"What is the email address of {clean_name} in {city_only}?"
+    result = _search_and_extract(query_2, engine="google_ai_mode")
     if result:
         return result
 
@@ -283,13 +309,13 @@ def fetch_email_via_google_search(api_key, business_name, full_address=None,
             domain = ""
         if domain:
             query_3 = f"email site:{domain}"
-            result = _search_and_extract(query_3)
+            result = _search_and_extract(query_3, engine="google")
             if result:
                 return result
 
     # ── Attempt 4: Generic contact-page organic fallback ────────────
     query_4 = f"{clean_name} {city_only} official contact email"
-    result = _search_and_extract(query_4)
+    result = _search_and_extract(query_4, engine="google")
     if result:
         return result
 
