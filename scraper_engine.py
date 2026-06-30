@@ -93,6 +93,73 @@ def extract_emails_from_text(text_content):
             return clean_emails[0]
     return None
 
+def check_business_closed_via_ai_mode(api_key, business_name, target_city=None, full_address=None):
+    """
+    Verifies whether a business is permanently closed using Google's
+    dedicated AI Mode engine — the same way a human would manually
+    check by asking Google AI Mode directly.
+
+    Used specifically for "No Website" businesses, since this is the
+    highest-risk category for being closed, and is also where the
+    email search fallback is most likely to grab a wrong email
+    belonging to a different business that has since taken over the
+    same domain/listing — actively misleading data, not just missing.
+
+    Returns True only when the response clearly indicates closure;
+    defaults to False (treat as open) on any ambiguity or error, so a
+    genuinely operating business is never wrongly excluded.
+    """
+    endpoint = "https://serpapi.com/search.json"
+
+    clean_name = business_name
+    for separator in [" - ", " – ", " — ", " | "]:
+        if separator in clean_name:
+            clean_name = clean_name.split(separator)[0].strip()
+            break
+
+    city_only = ""
+    if target_city:
+        city_only = target_city.split(',')[0].strip()
+    if not city_only and full_address and full_address != "Not Provided":
+        parts = [p.strip() for p in full_address.split(',')]
+        city_only = parts[-3] if len(parts) >= 3 else (parts[0] if parts else "")
+    if not city_only:
+        city_only = "USA"
+
+    location_text = f"{target_city or ''} {full_address or ''}".lower()
+    detected_gl = "us"
+    for country_name, code in {
+        "usa": "us", "united states": "us", "america": "us", "canada": "ca",
+        "uk": "gb", "united kingdom": "gb", "england": "gb", "australia": "au",
+        "new zealand": "nz", "ireland": "ie", "india": "in", "south africa": "za",
+    }.items():
+        if country_name in location_text:
+            detected_gl = code
+            break
+
+    query = f"Is {clean_name} in {city_only} still open, or has it permanently closed?"
+    params = {
+        "engine": "google_ai_mode",
+        "q": query,
+        "api_key": api_key,
+        "hl": "en",
+        "gl": detected_gl,
+    }
+    try:
+        resp = requests.get(endpoint, params=params, timeout=20)
+        if resp.status_code != 200:
+            return False
+        response_text = str(resp.json()).lower()
+        closure_phrases = [
+            "permanently closed", "has closed", "no longer in business",
+            "no longer open", "is now closed", "has shut down",
+            "out of business", "ceased operations", "closed down",
+        ]
+        return any(phrase in response_text for phrase in closure_phrases)
+    except Exception:
+        return False   # ambiguous/error → assume open, never wrongly exclude
+
+
 def fetch_email_via_google_search(api_key, business_name, full_address=None,
                                    target_city=None, website_url=None):
     """
@@ -542,6 +609,32 @@ def extract_local_leads(search_query, allowed_ratings, target_city=None,
                     if title.lower().strip() in processed_titles:
                         continue
 
+                    # ── Permanently closed filter ───────────────────────────
+                    # Google Maps still returns closed businesses in search
+                    # results, but their listed contact info is stale or
+                    # missing. Worse, our Google search fallback can return
+                    # an email belonging to a DIFFERENT business that has
+                    # since taken over the same address/domain — actively
+                    # misleading data, not just a missing-data gap. So
+                    # closed businesses are skipped entirely rather than
+                    # processed. Checked across every field Google might
+                    # use to signal this, since SerpAPI doesn't guarantee
+                    # one single consistent field name for it.
+                    closed_signal = " ".join([
+                        str(biz.get("business_status", "")),
+                        str(biz.get("open_state", "")),
+                        str(biz.get("hours", "")),
+                        str(biz.get("permanently_closed", "")),
+                    ]).lower()
+                    if (
+                        "closed_permanently" in closed_signal or
+                        "permanently closed" in closed_signal or
+                        closed_signal.strip() == "true"   # legacy permanently_closed: true
+                    ):
+                        log(f"⏭️  Permanently closed — skipped: {title}")
+                        processed_titles.add(title.lower().strip())
+                        continue
+
                     # ── Rating filter ──────────────────────────────────────
                     try: rating_val = float(biz.get("rating", 0))
                     except: rating_val = 0.0
@@ -586,11 +679,28 @@ def extract_local_leads(search_query, allowed_ratings, target_city=None,
                         log(f"⏭️  ATM skipped: {title}")
                         continue
 
+                    website_link = biz.get("website") or "No Website"
+                    full_address = biz.get("address", "") or "Not Provided"
+
+                    # ── AI Mode closure verification (No Website only) ─────
+                    # "No Website" is the highest-risk category for a
+                    # business being closed, and is exactly where the
+                    # email search fallback risks grabbing a wrong email
+                    # belonging to a different business that has since
+                    # taken over the same listing/domain. One AI Mode
+                    # check here — before any email search is attempted —
+                    # catches these cases cheaply (only for this risky
+                    # subset, not every lead) and prevents misleading data
+                    # from ever entering the results.
+                    if website_link == "No Website":
+                        if check_business_closed_via_ai_mode(api_key, title, target_city, full_address):
+                            log(f"⏭️  Permanently closed (verified via AI Mode) — skipped: {title}")
+                            processed_titles.add(title.lower().strip())
+                            continue
+
                     # ── Accepted — begin data collection ───────────────────
                     processed_titles.add(title.lower().strip())
                     total_leads += 1
-                    website_link = biz.get("website") or "No Website"
-                    full_address = biz.get("address", "") or "Not Provided"
                     
                     log(f"🏢 [{total_leads}] {title}")
                     
