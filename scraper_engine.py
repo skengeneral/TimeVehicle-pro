@@ -101,16 +101,19 @@ def fetch_email_via_google_search(api_key, business_name, full_address=None,
     Query format follows the user-discovered pattern that triggers Google
     AI Overview:  "Business Name, City - email id"
 
-    Three attempts are made before giving up:
-      Attempt 1 — AI-optimised format:  "{name}, {city} - email id"
-      Attempt 2 — Contact-page format:  "{name} {city} official contact email"
+    Four attempts are made before giving up:
+      Attempt 1 — AI-mode query:        "{name}, {city} - email id"
+      Attempt 2 — Second AI-mode query: "{name}, {city} - what is their email address"
+                  (differently worded in case the first phrasing didn't
+                   trigger an AI Overview for this specific business)
       Attempt 3 — Site-restricted:      "email site:{domain}"
                   (only when we know the business's website — searches
                    Google's index of that exact site, which often
                    surfaces an email from a contact page even when our
                    own browser crawler couldn't load the site directly)
+      Attempt 4 — Generic fallback:     "{name} {city} official contact email"
 
-    Attempts 2 and 3 only run when earlier attempts find nothing, so
+    Each later attempt only runs when all earlier ones find nothing, so
     extra API credits are only spent on businesses with genuinely
     hard-to-find emails.
 
@@ -571,9 +574,14 @@ def extract_local_leads(search_query, allowed_ratings, target_city=None,
                     email_id = found_metrics["Email ID"]
                     
                     if email_id == "Not Provided":
+                        log(f"   🔎 Searching Google for email...")
                         email_id = fetch_email_via_google_search(
                             api_key, title, full_address, target_city, website_link
                         )
+                        if email_id != "Not Provided":
+                            log(f"   ✅ Email found via Google: {email_id}")
+                        else:
+                            log(f"   ⚠️  Email not found for {title}")
                     
                     gps_hours = biz.get("operating_hours", {})
                     hours_string = (
