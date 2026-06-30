@@ -165,23 +165,25 @@ def fetch_email_via_google_search(api_key, business_name, full_address=None,
     """
     Deep email search using Google via SerpAPI.
 
-    Query format follows the user-discovered pattern that triggers Google
-    AI Overview:  "Business Name, City - email id"
-
-    Four attempts are made before giving up:
-      Attempt 1 — Classic AI Overview: "{name}, {city} - email id"
-      Attempt 2 — Real Google AI Mode: "What is the email address of
+    Three attempts are made before giving up, ordered from most to
+    least reliable:
+      Attempt 1 — Real Google AI Mode: "What is the email address of
                   {name} in {city}?" — uses SerpAPI's dedicated
                   google_ai_mode engine, the same conversational AI
-                  Mode tab available manually in Google search (distinct
-                  from and more capable than the classic AI Overview
-                  snippet used in Attempt 1)
-      Attempt 3 — Site-restricted:      "email site:{domain}"
+                  Mode tab available manually in Google search. Run
+                  first because it's the most precise and reliable
+                  method — the classic broad search (previously
+                  Attempt 1) was found to occasionally surface an
+                  unrelated email from a stale directory listing or
+                  embedded third-party widget rather than the
+                  business's real contact, so it has been removed.
+      Attempt 2 — Site-restricted:      "email site:{domain}"
                   (only when we know the business's website — searches
                    Google's index of that exact site, which often
                    surfaces an email from a contact page even when our
                    own browser crawler couldn't load the site directly)
-      Attempt 4 — Generic fallback:     "{name} {city} official contact email"
+      Attempt 3 — Generic fallback:     "{name} {city} official contact email"
+                  (broadest, last resort only)
 
     Each later attempt only runs when all earlier ones find nothing, so
     extra API credits are only spent on businesses with genuinely
@@ -189,6 +191,7 @@ def fetch_email_via_google_search(api_key, business_name, full_address=None,
 
     Every SerpAPI response field is checked:
       ai_overview → answer_box → knowledge_graph → organic snippets
+      → full-response catch-all scan
     """
     endpoint = "https://serpapi.com/search.json"
 
@@ -345,24 +348,18 @@ def fetch_email_via_google_search(api_key, business_name, full_address=None,
             pass
         return None
 
-    # ── Attempt 1: AI-mode optimised query (classic AI Overview) ────
-    query_1 = f"{clean_name}, {city_only} - email id"
-    result = _search_and_extract(query_1, engine="google")
+    # ── Attempt 1: Real Google AI Mode — direct question ──────────────
+    # Uses SerpAPI's dedicated google_ai_mode engine, the same
+    # conversational AI Mode experience available manually in Google
+    # search. Run first because it's the most precise and reliable
+    # method available — confirmed by direct comparison against manual
+    # AI Mode searches.
+    query_1 = f"What is the email address of {clean_name} in {city_only}?"
+    result = _search_and_extract(query_1, engine="google_ai_mode")
     if result:
         return result
 
-    # ── Attempt 2: Real Google AI Mode — direct question ─────────────
-    # Uses SerpAPI's dedicated google_ai_mode engine, which is the same
-    # conversational AI Mode experience available in the Google AI Mode
-    # tab manually. This is genuinely more capable than the classic AI
-    # Overview snippet and can answer direct questions it never
-    # triggers for.
-    query_2 = f"What is the email address of {clean_name} in {city_only}?"
-    result = _search_and_extract(query_2, engine="google_ai_mode")
-    if result:
-        return result
-
-    # ── Attempt 3: Site-restricted search (only if website is known) ─
+    # ── Attempt 2: Site-restricted search (only if website is known) ─
     # Searches Google's index of the exact website domain — this often
     # finds an email from a contact/about page even when our own
     # browser crawler failed to load the site (slow, JS-heavy, or
@@ -375,14 +372,14 @@ def fetch_email_via_google_search(api_key, business_name, full_address=None,
         except Exception:
             domain = ""
         if domain:
-            query_3 = f"email site:{domain}"
-            result = _search_and_extract(query_3, engine="google")
+            query_2 = f"email site:{domain}"
+            result = _search_and_extract(query_2, engine="google")
             if result:
                 return result
 
-    # ── Attempt 4: Generic contact-page organic fallback ────────────
-    query_4 = f"{clean_name} {city_only} official contact email"
-    result = _search_and_extract(query_4, engine="google")
+    # ── Attempt 3: Generic contact-page organic fallback ────────────
+    query_3 = f"{clean_name} {city_only} official contact email"
+    result = _search_and_extract(query_3, engine="google")
     if result:
         return result
 
